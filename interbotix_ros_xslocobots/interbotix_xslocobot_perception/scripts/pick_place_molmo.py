@@ -11,10 +11,9 @@ from interbotix_xs_modules.locobot import InterbotixLocobotXS
 
 import rospy
 
-import numpy as npz
+import numpy as np
 
 IMAGE_DIR = "/tmp/rgbd"
-
 
 import os
 import glob
@@ -22,6 +21,7 @@ import glob
 # Define paths
 base_dir = "/tmp/rgbd"
 folders = ["depth", "intrinsics", "pose", "rgb"]
+
 
 # Function to get the latest file from a folder
 def get_latest_file(folder_path, extension):
@@ -31,6 +31,7 @@ def get_latest_file(folder_path, extension):
     # Sort files by modification time
     latest_file = max(files, key=os.path.getmtime)
     return latest_file
+
 
 def get_latest_DIPR():
     # Get the latest files from each folder
@@ -44,19 +45,23 @@ def get_latest_DIPR():
     print(latest_tuple)
     return latest_tuple
 
+
 from barebonesllmchat.terminal.interface import ChatbotClient
 from barebonesllmchat.common.chat_history import CHAT_ROLE, ChatHistory, ChatHistoryWithImages
+
 client = None
+
+
 def vlm_point_at(image_path, queries):
     global client
 
     if client is None:
         client = ChatbotClient("http://127.0.0.1:5000", "your_api_key")
 
-    
+    chat_history_with_images = ChatHistoryWithImages(ChatHistory(), {})
+
     answers = []
     for query in queries:
-        chat_history_with_images = ChatHistoryWithImages(ChatHistory(), {})
         # if this ever goes to production, this can easily be batch on the llm side, but the client doesn't support it yet
         chat_history_with_images = chat_history_with_images.add(CHAT_ROLE.USER, query, image_path)
         client.send_history("new chat!", chat_history_with_images)
@@ -67,18 +72,22 @@ def vlm_point_at(image_path, queries):
     points = {}
     for query, answer in zip(queries, answers):
         pointed = answer.history[-1]["content"]
-        
+
         x = float(pointed.split(' x="')[-1].split('" ')[0])
         y = float(pointed.split(' y="')[-1].split('" ')[0])
-        
-        points[query] = (x,y)
+
+        points[query] = (x, y)
 
     return points
+
+
 import tf2_ros
 import cv2
 import numpy as np
 from tf.transformations import euler_from_quaternion
 from interbotix_common_modules import angle_manipulation as ang
+
+
 def pixel_relxy_to_pixel_absxyd(relative_xy, rgb_path, depth_path, intrinsic_path):
     # Load the RGB image to get its dimensions
     rgb_image = cv2.imread(rgb_path)
@@ -94,14 +103,17 @@ def pixel_relxy_to_pixel_absxyd(relative_xy, rgb_path, depth_path, intrinsic_pat
         raise ValueError("Failed to load the depth image.")
 
     # Get the depth value at the pixel (u, v)
-    z = depth_image[v, u]  / 1000.0  # Assuming depth is in millimeters, convert to meters
+    z = depth_image[v, u] / 1000.0  # Assuming depth is in millimeters, convert to meters
 
     # Check for invalid depth
     if z == 0:
         raise ValueError("Depth value is zero at the specified pixel.")
-    return u,v,z
+    return u, v, z
+
 
 import pyrealsense2
+
+
 def pixel_absxyd_to_cameraframe(absxyd):
     cameraInfo = rospy.wait_for_message("/locobot/camera/color/camera_info", CameraInfo)
 
@@ -112,12 +124,13 @@ def pixel_absxyd_to_cameraframe(absxyd):
     _intrinsics.ppy = cameraInfo.K[5]
     _intrinsics.fx = cameraInfo.K[0]
     _intrinsics.fy = cameraInfo.K[4]
-    
-    #_intrinsics.model = cameraInfo.distortion_model
-    _intrinsics.model  = pyrealsense2.distortion.none  
-    _intrinsics.coeffs = [i for i in cameraInfo.D]  
-    result = pyrealsense2.rs2_deproject_pixel_to_point(_intrinsics, [absxyd[0], absxyd[1]], absxyd[2])  #result[0]: right, result[1]: down, result[2]: forward
-    return result #result[2], -result[0], -result[1]
+
+    # _intrinsics.model = cameraInfo.distortion_model
+    _intrinsics.model = pyrealsense2.distortion.none
+    _intrinsics.coeffs = [i for i in cameraInfo.D]
+    result = pyrealsense2.rs2_deproject_pixel_to_point(_intrinsics, [absxyd[0], absxyd[1]], absxyd[
+        2])  # result[0]: right, result[1]: down, result[2]: forward
+    return result  # result[2], -result[0], -result[1]
 
 
 def cameraframe_xyz_to_otherframe(xyz, ref_frame="locobot/arm_base_link"):
@@ -136,29 +149,30 @@ def cameraframe_xyz_to_otherframe(xyz, ref_frame="locobot/arm_base_link"):
     q = [quat.x, quat.y, quat.z, quat.w]
     rpy = euler_from_quaternion(q)
     T_rc = ang.poseToTransformationMatrix([tranx, trany, tranz, rpy[0], rpy[1], rpy[2]])
-    
-    x,y,z = xyz
+
+    x, y, z = xyz
     p_co = [x, y, z, 1]
     p_ro = np.dot(T_rc, p_co)
 
     return tuple(list(p_ro)[:-1])
 
+
 def magic_final_adjustments(xyz, distance=0.025):
     # Convert point to a numpy array
     point = np.array(xyz)
-    
+
     # Compute the direction vector from the origin
     direction = point
-    
+
     # Normalize the direction vector
     norm = np.linalg.norm(direction)
     if norm == 0:
         raise ValueError("The point is at the origin, cannot determine direction.")
     direction_normalized = direction / norm
-    
+
     # Scale the direction vector by the specified distance
     scaled_vector = direction_normalized * distance
-    
+
     # Move the point by adding the scaled vector
     new_point = point + scaled_vector
     return tuple(list(new_point))
@@ -173,7 +187,10 @@ def dictmap(dico, func):
         ret[key] = func(val)
     return ret
 
+
 import functools
+
+
 def main():
     bot = InterbotixLocobotXS("locobot_wx250s", arm_model="mobile_wx250s")
 
@@ -188,24 +205,24 @@ def main():
     result = service()
     rospy.loginfo(result)
     print("service called")
-    
+
     bot.arm.set_ee_pose_components(x=0.3, z=0.2, moving_time=1.5)
     bot.gripper.open()
-
 
     depth, intrinsics, pose, rgb = get_latest_DIPR()
 
     import sys
     queries = []
     for arg in sys.argv[1:]:
-        queries.append(f"Point at the {arg} please")
+        queries.append(f"Point at the center of the {arg} please")
 
-    #queries = ["Point at the center of the white duckie please"]#, "Point at the green duckie please", "Point at the white duckie please"]
+    # queries = ["Point at the center of the white duckie please"]#, "Point at the green duckie please", "Point at the white duckie please"]
     points_xy = vlm_point_at(rgb, queries)
     print("pixel rel xy")
     print(points_xy)
-    
-    points_xyd = dictmap(points_xy, functools.partial(pixel_relxy_to_pixel_absxyd, rgb_path=rgb, depth_path=depth, intrinsic_path=intrinsics))
+
+    points_xyd = dictmap(points_xy, functools.partial(pixel_relxy_to_pixel_absxyd, rgb_path=rgb, depth_path=depth,
+                                                      intrinsic_path=intrinsics))
     print("pixel abs xyd")
     print(points_xyd)
     points_xyz = dictmap(points_xyd, functools.partial(pixel_absxyd_to_cameraframe))
@@ -215,19 +232,18 @@ def main():
     print("arm base frame xyz")
     print(points_xyz)
 
-
     points_xyz = dictmap(points_xyz, functools.partial(magic_final_adjustments))
     print("arm base frame xyz")
     print(points_xyz)
 
-    #exit()
+    # exit()
     for query, cluster in points_xyz.items():
         print(cluster)
         x, y, z = cluster
-        bot.arm.set_ee_pose_components(x=x, y=y, z=z+0.05, pitch=0.5)
+        bot.arm.set_ee_pose_components(x=x, y=y, z=z + 0.05, pitch=0.5)
         bot.arm.set_ee_pose_components(x=x, y=y, z=z, pitch=0.5)
         bot.gripper.close()
-        bot.arm.set_ee_pose_components(x=x, y=y, z=z+0.05, pitch=0.5)
+        bot.arm.set_ee_pose_components(x=x, y=y, z=z + 0.05, pitch=0.5)
         bot.arm.set_ee_pose_components(y=0.3, z=0.2)
         bot.gripper.open()
     bot.arm.set_ee_pose_components(x=0.3, z=0.2)
@@ -238,4 +254,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
